@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Nuevo Job{% endblock %}
+{% block content %}
+  <h2>Crear auditoría</h2>
+  <form method="POST" enctype="multipart/form-data">
+    {{ form.hidden_tag() }}
+
+    <div>
+      {{ form.naviera.label }}<br>
+      {{ form.naviera() }}
+    </div>
+
+    <div>
+      {{ form.archivo_facturacion.label }}<br>
+      {{ form.archivo_facturacion() }}
+    </div>
+
+    <div>
+      {{ form.archivo_fils.label }}<br>
+      {{ form.archivo_fils() }}
+    </div>
+
+    <div style="margin-top: 12px;">
+      {{ form.submit() }}
+    </div>
+  </form>
+{% endblock %}

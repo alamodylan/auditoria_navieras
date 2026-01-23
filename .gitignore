@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Env
+.env
+
+# Flask / instance
+instance/
+
+# Uploads y outputs
+uploads/
+outputs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Migrations cache
+migrations/**/__pycache__/

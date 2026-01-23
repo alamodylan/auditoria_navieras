@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Pre-check{% endblock %}
+
+{% block content %}
+  <h2>Pre-check</h2>
+
+  <p><b>Job:</b> {{ job_id }}</p>
+
+  {% set ok = report.ok %}
+  <p>
+    <b>Resultado:</b>
+    {% if ok %}
+      <span style="color: green; font-weight: bold;">OK</span>
+    {% else %}
+      <span style="color: red; font-weight: bold;">FALLÓ</span>
+    {% endif %}
+  </p>
+
+  <h3>Hallazgos</h3>
+  {% if report.issues and report.issues|length > 0 %}
+    <table border="1" cellpadding="6" style="width: 100%;">
+      <thead>
+        <tr>
+          <th>Nivel</th>
+          <th>Mensaje</th>
+          <th>Contexto</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for i in report.issues %}
+          <tr {% if i.level == "ERROR" %}style="background:#ffe5e5;"{% endif %}>
+            <td><b>{{ i.level }}</b></td>
+            <td style="white-space: pre-wrap;">{{ i.message }}</td>
+            <td>
+              {% if i.context %}
+                <pre style="margin:0; white-space: pre-wrap;">{{ i.context | tojson(indent=2) }}</pre>
+              {% else %}
+                -
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No se detectaron hallazgos.</p>
+  {% endif %}
+
+  <h3>Metadatos</h3>
+  <details>
+    <summary>Ver detalle técnico</summary>
+    <pre style="white-space: pre-wrap;">{{ report.meta | tojson(indent=2) }}</pre>
+  </details>
+
+  <div style="margin-top: 16px;">
+    {% if ok %}
+      <form method="POST" action="{{ url_for('web.run_job_route', job_id=job_id) }}">
+        <button type="submit">Ejecutar Job</button>
+      </form>
+    {% else %}
+      <p style="color:#b00020;">
+        No se puede ejecutar el job porque el pre-check tiene errores bloqueantes.
+      </p>
+      <p>
+        <a href="{{ url_for('web.upload') }}">Volver a cargar archivos</a>
+      </p>
+    {% endif %}
+  </div>
+
+{% endblock %}

@@ -1,0 +1,1 @@
+// placeholder: luego lo usamos para tablas, filtros, etc.

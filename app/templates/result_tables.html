@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Resultados Job {{ job.id }}{% endblock %}
+
+{% block content %}
+<h2>Resultados - Job #{{ job.id }}</h2>
+
+<p>
+  <b>Naviera:</b> {{ job.naviera }} |
+  <b>Estado:</b> {{ job.status }} |
+  <b>Creado:</b> {{ job.created_at }}
+</p>
+
+{% if job.status != "DONE" %}
+  <p>Este job aún no está finalizado. Estado actual: <b>{{ job.status }}</b></p>
+  {% if job.error_message %}
+    <h3>Error</h3>
+    <pre style="white-space: pre-wrap;">{{ job.error_message }}</pre>
+  {% endif %}
+  {% endblock %}
+{% endif %}
+
+{% if kpi %}
+<div style="border:1px solid #ddd; padding:12px; margin: 12px 0;">
+  <h3>KPIs</h3>
+  <table border="1" cellpadding="6">
+    <tr>
+      <th>Total guías</th>
+      <th>Guías OK</th>
+      <th>Con diferencia</th>
+      <th>NO_CERRADA</th>
+      <th>Solo en FILS</th>
+      <th>Solo en Naviera</th>
+      <th>Total FILS</th>
+      <th>Total Naviera</th>
+      <th>Diferencia global</th>
+    </tr>
+    <tr>
+      <td>{{ kpi.total_guias }}</td>
+      <td>{{ kpi.guias_ok }}</td>
+      <td>{{ kpi.guias_diferencia }}</td>
+      <td>{{ kpi.guias_no_cerrada }}</td>
+      <td>{{ kpi.guias_solo_en_fils }}</td>
+      <td>{{ kpi.guias_solo_en_naviera }}</td>
+      <td>{{ kpi.total_fils }}</td>
+      <td>{{ kpi.total_naviera }}</td>
+      <td>{{ kpi.diferencia_global }}</td>
+    </tr>
+  </table>
+</div>
+{% endif %}
+
+<p>
+  <a href="{{ url_for('web.download_export', job_id=job.id) }}">Descargar Excel (multihoja)</a>
+</p>
+
+<hr>
+
+<h3>Resumen de Guías</h3>
+
+<div style="margin-bottom: 10px;">
+  <label><b>Filtro:</b></label>
+  <select id="filterOk">
+    <option value="ALL">Todas</option>
+    <option value="OK">Solo OK</option>
+    <option value="BAD">Solo con diferencia / errores</option>
+  </select>
+
+  <label style="margin-left: 10px;"><b>Buscar guía:</b></label>
+  <input id="searchGuia" type="text" placeholder="Ej: 224655" />
+
+  <button id="btnClear" type="button" style="margin-left: 8px;">Limpiar</button>
+</div>
+
+<table id="tablaResumen" border="1" cellpadding="6" style="width: 100%;">
+  <thead>
+    <tr>
+      <th>Guía</th>
+      <th>Estado</th>
+      <th>Total FILS</th>
+      <th>Total Naviera</th>
+      <th>Diferencia</th>
+      <th>OK</th>
+      <th>Fuente Naviera</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in resumen %}
+    <tr data-ok="{{ 'OK' if r.ok else 'BAD' }}" data-guia="{{ r.guia }}">
+      <td><b>{{ r.guia }}</b></td>
+      <td>{{ r.estado }}</td>
+      <td>{{ r.total_fils }}</td>
+      <td>{{ r.total_naviera }}</td>
+      <td {% if not r.ok %}style="background:#ffe5e5;"{% endif %}>{{ r.diferencia }}</td>
+      <td>{{ "SI" if r.ok else "NO" }}</td>
+      <td>{{ r.fuente_naviera or "" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<hr>
+
+<details open>
+  <summary><b>Detalle de Contenedores</b> ({{ contenedores|length }})</summary>
+  <div style="margin-top:10px;">
+    <table border="1" cellpadding="6" style="width:100%;">
+      <thead>
+        <tr>
+          <th>Guía</th>
+          <th>Contenedor</th>
+          <th>Ruta</th>
+          <th>Flete</th>
+          <th>Extras</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for c in contenedores %}
+        <tr>
+          <td>{{ c.guia }}</td>
+          <td>{{ c.contenedor }}</td>
+          <td>{{ c.ruta or "" }}</td>
+          <td>{{ c.flete }}</td>
+          <td>{{ c.extras }}</td>
+          <td>{{ c.total }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<details>
+  <summary><b>Detalle de Cargos</b> ({{ cargos|length }})</summary>
+  <div style="margin-top:10px;">
+    <table border="1" cellpadding="6" style="width:100%;">
+      <thead>
+        <tr>
+          <th>Guía</th>
+          <th>Contenedor</th>
+          <th>Tipo Cargo</th>
+          <th>Monto</th>
+          <th>Origen</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for ch in cargos %}
+        <tr>
+          <td>{{ ch.guia }}</td>
+          <td>{{ ch.contenedor or "" }}</td>
+          <td>{{ ch.tipo_cargo }}</td>
+          <td>{{ ch.monto }}</td>
+          <td>{{ ch.origen }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<details open>
+  <summary><b>Excepciones</b> ({{ excepciones|length }})</summary>
+  <div style="margin-top:10px;">
+    <table border="1" cellpadding="6" style="width:100%;">
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Guía</th>
+          <th>Contenedor</th>
+          <th>Severidad</th>
+          <th>Detalle</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for e in excepciones %}
+        <tr {% if e.severidad == 'ERROR' %}style="background:#ffe5e5;"{% endif %}>
+          <td><b>{{ e.tipo }}</b></td>
+          <td>{{ e.guia or "" }}</td>
+          <td>{{ e.contenedor or "" }}</td>
+          <td>{{ e.severidad }}</td>
+          <td style="white-space: pre-wrap;">{{ e.detalle }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<script>
+(function() {
+  const filterOk = document.getElementById("filterOk");
+  const searchGuia = document.getElementById("searchGuia");
+  const btnClear = document.getElementById("btnClear");
+  const tbody = document.querySelector("#tablaResumen tbody");
+  const rows = Array.from(tbody.querySelectorAll("tr"));
+
+  function applyFilters() {
+    const okVal = filterOk.value; // ALL | OK | BAD
+    const q = (searchGuia.value || "").trim();
+
+    rows.forEach(tr => {
+      const rowOk = tr.getAttribute("data-ok");
+      const guia = tr.getAttribute("data-guia") || "";
+
+      let visible = true;
+      if (okVal !== "ALL" && rowOk !== okVal) visible = false;
+      if (q && !guia.includes(q)) visible = false;
+
+      tr.style.display = visible ? "" : "none";
+    });
+  }
+
+  filterOk.addEventListener("change", applyFilters);
+  searchGuia.addEventListener("input", applyFilters);
+  btnClear.addEventListener("click", () => {
+    filterOk.value = "ALL";
+    searchGuia.value = "";
+    applyFilters();
+  });
+
+  applyFilters();
+})();
+</script>
+
+{% endblock %}

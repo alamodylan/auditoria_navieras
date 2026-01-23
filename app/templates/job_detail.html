@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }}{% endblock %}
+{% block content %}
+  <h2>Job #{{ job.id }}</h2>
+  <p><b>Estado:</b> {{ job.status }}</p>
+  {% if job.error_message %}
+    <pre>{{ job.error_message }}</pre>
+  {% endif %}
+
+  <h3>Archivos</h3>
+  <ul>
+    {% for f in job.files %}
+      <li>{{ f.file_type }} - {{ f.original_name }}</li>
+    {% endfor %}
+  </ul>
+
+  {% if job.status == "DONE" %}
+    <p>
+      <a href="{{ url_for('web.download_export', job_id=job.id) }}">Descargar Excel</a>
+    </p>
+  {% endif %}
+{% endblock %}

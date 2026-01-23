@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Historial{% endblock %}
+{% block content %}
+  <h2>Historial de Jobs</h2>
+  <table border="1" cellpadding="6">
+    <tr>
+      <th>ID</th><th>Estado</th><th>Creado</th><th>Naviera</th><th>Acción</th>
+    </tr>
+    {% for j in jobs %}
+    <tr>
+      <td>{{ j.id }}</td>
+      <td>{{ j.status }}</td>
+      <td>{{ j.created_at }}</td>
+      <td>{{ j.naviera if j.naviera else "-" }}</td>
+      <td><a href="{{ url_for('web.job_detail', job_id=j.id) }}">Ver</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+{% endblock %}
