@@ -2,11 +2,19 @@
 
 from app.extensions import db
 
+
 class ResultKPI(db.Model):
     __tablename__ = "result_kpi"
+    __table_args__ = {"schema": "auditoria"}
 
     id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.Integer, db.ForeignKey("jobs.id"), nullable=False)
+
+    job_id = db.Column(
+        db.Integer,
+        db.ForeignKey("auditoria.jobs.id"),
+        nullable=False,
+        index=True,
+    )
 
     total_guias = db.Column(db.Integer, nullable=False, default=0)
     guias_ok = db.Column(db.Integer, nullable=False, default=0)

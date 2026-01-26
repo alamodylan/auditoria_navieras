@@ -3,10 +3,13 @@
 from datetime import datetime
 from app.extensions import db
 
+
 class Job(db.Model):
     __tablename__ = "jobs"
+    __table_args__ = {"schema": "auditoria"}
 
     id = db.Column(db.Integer, primary_key=True)
+
     status = db.Column(db.String(30), nullable=False, default="CREATED")
     naviera = db.Column(db.String(30), nullable=False, default="COSCO")
 

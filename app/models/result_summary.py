@@ -2,11 +2,19 @@
 
 from app.extensions import db
 
+
 class ResultSummary(db.Model):
     __tablename__ = "result_summary"
+    __table_args__ = {"schema": "auditoria"}
 
     id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.Integer, db.ForeignKey("jobs.id"), nullable=False)
+
+    job_id = db.Column(
+        db.Integer,
+        db.ForeignKey("auditoria.jobs.id"),
+        nullable=False,
+        index=True,
+    )
 
     guia = db.Column(db.String(50), nullable=False, index=True)
     estado = db.Column(db.String(30), nullable=False)  # CERRADA / NO_CERRADA / etc.

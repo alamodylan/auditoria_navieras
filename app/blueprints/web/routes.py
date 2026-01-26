@@ -8,6 +8,8 @@ from flask import (
     flash, send_file, current_app
 )
 
+from sqlalchemy import text  # ✅ NUEVO
+
 from app.extensions import db
 from app.models import (
     Job, JobFile,
@@ -39,10 +41,30 @@ def upload():
 
         naviera = (form.naviera.data or "COSCO").upper().strip()
 
+        # ✅ Blindaje: garantizar schema en ESTA conexión (no depende de ALTER ROLE)
+        db.session.execute(text("SET search_path TO auditoria, public;"))
+
+        # ✅ Diagnóstico (temporal): confirmar qué tabla usa el modelo en runtime
+        try:
+            current_app.logger.warning(
+                f"JOB DEBUG => module={Job.__module__} | fullname={Job.__table__.fullname} | schema={Job.__table__.schema}"
+            )
+            current_app.logger.warning(
+                f"JOBFILE DEBUG => module={JobFile.__module__} | fullname={JobFile.__table__.fullname} | schema={JobFile.__table__.schema}"
+            )
+        except Exception as e:
+            current_app.logger.warning(f"DEBUG MODEL ERROR: {e}")
+
         # 1) Crear Job
-        job = Job(naviera=naviera, status="CREATED")
-        db.session.add(job)
-        db.session.commit()
+        try:
+            job = Job(naviera=naviera, status="CREATED")
+            db.session.add(job)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception(f"Error creando Job: {e}")
+            flash("No se pudo crear el job en la base de datos.", "error")
+            return render_template("upload.html", form=form)
 
         # 2) Guardar archivos
         try:
@@ -77,6 +99,7 @@ def upload():
             db.session.commit()
 
         except Exception as e:
+            db.session.rollback()
             job.status = "FAILED"
             job.error_message = f"Error guardando archivos: {e}"
             db.session.commit()
@@ -100,6 +123,7 @@ def upload():
             )
 
         except Exception as e:
+            db.session.rollback()
             job.status = "FAILED"
             job.error_message = f"Pre-check falló: {e}"
             db.session.commit()
