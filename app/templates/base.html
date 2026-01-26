@@ -1,33 +1,54 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <title>{% block title %}Auditoría Navieras{% endblock %}</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Auditoría ONE / COSCO{% endblock %}</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
-<body>
-  <div class="container">
-    <header>
-      <h1>Auditoría ONE / COSCO vs FILS</h1>
-      <nav>
-        <a href="{{ url_for('web.home') }}">Inicio</a>
-        <a href="{{ url_for('web.upload') }}">Nuevo Job</a>
-        <a href="{{ url_for('web.jobs') }}">Historial</a>
-      </nav>
-    </header>
+<body class="bg-light">
 
-    <main>
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <ul class="flashes">
-            {% for cat, msg in messages %}
-              <li class="{{ cat }}">{{ msg }}</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      {% endwith %}
-      {% block content %}{% endblock %}
-    </main>
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+  <div class="container">
+    <a class="navbar-brand fw-semibold" href="{{ url_for('web.home') }}">Auditoría ONE / COSCO</a>
+
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+
+    <div class="collapse navbar-collapse" id="navMain">
+      <div class="navbar-nav ms-auto">
+        <a class="nav-link" href="{{ url_for('web.upload') }}">Subir archivos</a>
+        <a class="nav-link" href="{{ url_for('web.jobs') }}">Jobs</a>
+      </div>
+    </div>
   </div>
+</nav>
+
+<main class="container py-4">
+
+  {# Mapeo de flashes a Bootstrap #}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, msg in messages %}
+        {% set bs = category %}
+        {% if category == 'error' %}{% set bs = 'danger' %}{% endif %}
+        {% if category == 'warn' %}{% set bs = 'warning' %}{% endif %}
+        {% if category == 'ok' %}{% set bs = 'success' %}{% endif %}
+        <div class="alert alert-{{ bs }} alert-dismissible fade show" role="alert">
+          {{ msg }}
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Cerrar"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

@@ -1,11 +1,57 @@
-<!-- app/templates/home.html -->
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Auditoría Navieras</title>
-</head>
-<body>
-    <h1>Auditoría ONE / COSCO</h1>
-    <p>App corriendo correctamente.</p>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Auditoría ONE / COSCO{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-12 col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <h1 class="h3 mb-2">Auditoría ONE / COSCO vs FILS</h1>
+        <p class="text-muted mb-4">
+          Flujo: Subir archivos → Pre-check → Ejecutar job → Ver resultados → Descargar Excel.
+        </p>
+
+        <div class="d-flex flex-wrap gap-2">
+          <a class="btn btn-primary" href="{{ url_for('web.upload') }}">Subir archivos</a>
+          <a class="btn btn-outline-secondary" href="{{ url_for('web.jobs') }}">Ver Jobs</a>
+        </div>
+
+        <hr class="my-4">
+
+        <div class="row g-3">
+          <div class="col-12 col-md-6">
+            <div class="p-3 border rounded bg-white">
+              <div class="text-muted small">Entrada requerida</div>
+              <div class="fw-semibold">Facturación ONE/COSCO</div>
+              <div class="text-muted small">+ ReporteGuiaAuditoria (FILS)</div>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <div class="p-3 border rounded bg-white">
+              <div class="text-muted small">Salida</div>
+              <div class="fw-semibold">Excel multihoja</div>
+              <div class="text-muted small">KPIs + Excepciones + Detalle</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-body p-4">
+        <div class="text-muted small text-uppercase">Accesos rápidos</div>
+        <div class="d-grid gap-2 mt-3">
+          <a class="btn btn-outline-primary" href="{{ url_for('web.upload') }}">Ir a Upload</a>
+          <a class="btn btn-outline-dark" href="{{ url_for('web.jobs') }}">Ir a Jobs</a>
+        </div>
+        <div class="mt-4 text-muted small">
+          Si el home “no hace nada”, es porque el trabajo se inicia en <span class="fw-semibold">Upload</span>.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -3,3 +3,6 @@ body { font-family: Arial, sans-serif; }
 nav a { margin-right: 10px; }
 .flashes { list-style: none; padding: 0; }
 .flashes li { padding: 8px; margin: 6px 0; background: #f1f1f1; }
+body { font-size: 0.95rem; }
+.card { border: 0; }
+.border.rounded { border-color: #e9ecef !important; }
