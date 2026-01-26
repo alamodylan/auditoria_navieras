@@ -2,17 +2,25 @@ services:
   - type: web
     name: auditoria-navieras
     env: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt
+    rootDir: .
+    plan: free  # o free si te deja (depende de tu cuenta)
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: gunicorn wsgi:app
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
+
       - key: DATABASE_URL
         sync: false
+
       - key: UPLOAD_FOLDER
         value: uploads
+
       - key: OUTPUT_FOLDER
         value: outputs
+
       - key: MONEY_TOLERANCE
         value: "1.00"
