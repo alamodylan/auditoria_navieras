@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 from typing import Dict, List, Iterable, Optional
+import unicodedata
+
+from openpyxl import load_workbook
 
 from app.extensions import db
 from app.models import (
@@ -43,6 +46,22 @@ def _bulk_insert(model, rows: List[dict]) -> None:
     db.session.commit()
 
 
+def _strip_accents(s: str) -> str:
+    if not s:
+        return ""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", s)
+        if not unicodedata.combining(c)
+    )
+
+
+def _norm_header(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = _strip_accents(s)
+    s = " ".join(s.split())
+    return s
+
+
 def _parse_fecha(value) -> Optional[datetime]:
     """
     Parsea fecha del FILS.
@@ -57,11 +76,47 @@ def _parse_fecha(value) -> Optional[datetime]:
     if not s:
         return None
 
-    # formato más común del reporte
     try:
         return datetime.strptime(s, "%d/%m/%Y %H:%M")
     except Exception:
         return None
+
+
+def _detect_fils_header_row(fils_path: str) -> int:
+    """
+    Detecta si el header real está en fila 1 o 2.
+    Regla: buscamos columnas clave (numero guia + monto tarifa)
+    en las dos primeras filas.
+    """
+    try:
+        wb = load_workbook(filename=fils_path, read_only=True, data_only=True)
+        try:
+            ws = wb.worksheets[0]
+            row1 = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), None)
+            row2 = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), None)
+
+            def row_has_keys(row) -> bool:
+                if not row:
+                    return False
+                headers = [_norm_header(str(x) if x is not None else "") for x in row]
+                has_guia = any("numero guia" in h for h in headers)
+                has_monto = any("monto tarifa" in h for h in headers) or any("monto total" in h for h in headers) or any(h == "total" for h in headers)
+                return has_guia and has_monto
+
+            if row_has_keys(row1):
+                return 1
+            if row_has_keys(row2):
+                return 2
+
+            # fallback: por compatibilidad, asume fila 1
+            return 1
+        finally:
+            try:
+                wb.close()
+            except Exception:
+                pass
+    except Exception:
+        return 1
 
 
 def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
@@ -89,19 +144,19 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
         # FILS streaming -> iterable dicts (alineado a headers reales)
         # ----------------------------
         fils_parser = FILSAuditoriaParser()
+        header_row = _detect_fils_header_row(fils_path)
+        logger.info(f"FILS detected header_row={header_row}")
 
         def iter_fils_dicts() -> Iterable[dict]:
-            # Headers reales detectados en tu reporte:
-            # "Número Guía", "Fecha", "Estado", "Contenedor", "Ruta", "Monto Tarifa"
-            guia_hints = ["número guía", "numero guía", "numero guia"]
+            # OJO: headers vienen normalizados sin tildes (por fils_auditoria)
+            guia_hints = ["numero guia"]
             cont_hints = ["contenedor"]
             estado_hints = ["estado"]
             fecha_hints = ["fecha"]
             ruta_hints = ["ruta"]
-            monto_tarifa_hints = ["monto tarifa"]
+            monto_tarifa_hints = ["monto tarifa"]  # el total que vas a comparar
 
-            def find_idx(headers: List[str], hints: List[str]):
-                # headers ya vienen normalizados a lower por el parser
+            def find_idx(headers: List[str], hints: List[str]) -> Optional[int]:
                 for i, h in enumerate(headers):
                     hh = (h or "")
                     for hint in hints:
@@ -110,9 +165,9 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
                 return None
 
             header_cached = None
-            idx_map = {}
+            idx_map: Dict[str, Optional[int]] = {}
 
-            for headers, row in fils_parser.iter_rows(fils_path, header_row=1):
+            for headers, row in fils_parser.iter_rows(fils_path, header_row=header_row):
                 if not headers:
                     continue
 
@@ -127,13 +182,13 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
                     idx_map["monto_tarifa"] = find_idx(headers, monto_tarifa_hints)
 
                     if idx_map["guia"] is None:
-                        raise ValueError("FILS: no se encontró columna 'Número Guía'.")
+                        raise ValueError("FILS: no se encontró columna 'Número Guía' (numero guia).")
                     if idx_map["monto_tarifa"] is None:
-                        raise ValueError("FILS: no se encontró columna 'Monto Tarifa' (total a comparar).")
+                        raise ValueError("FILS: no se encontró columna 'Monto Tarifa' (monto tarifa).")
 
                     logger.info(f"FILS idx_map={idx_map}")
 
-                def cell(i):
+                def cell(i: Optional[int]):
                     if i is None:
                         return None
                     return row[i] if i < len(row) else None
@@ -148,9 +203,11 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
                 estado = str(cell(idx_map["estado"]) or "").strip().upper()
 
                 fecha = _parse_fecha(cell(idx_map["fecha"]))
+                # clave para ordenar sin reventar: si None, usamos datetime.min
+                fecha_sort = fecha if fecha is not None else datetime.min
+
                 ruta = str(cell(idx_map["ruta"]) or "").strip()
 
-                # Este es el monto correcto para auditar vs naviera
                 monto_tarifa = cell(idx_map["monto_tarifa"])
 
                 yield {
@@ -158,14 +215,13 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
                     "contenedor": cont,
                     "estado": estado,
 
-                    # reconcile() usa esto para escoger "última cerrada" si existe
-                    "fecha": fecha,
-                    "fecha_cierre": fecha,
+                    # reconcile() usa esto para escoger "última cerrada"
+                    "fecha": fecha_sort,
+                    "fecha_cierre": fecha_sort,
 
                     # reconcile() toma monto_total primero
                     "monto_total": monto_tarifa,
 
-                    # No usamos estos para comparar (pero los dejamos por compatibilidad)
                     "monto_flete": None,
                     "monto_extras": None,
 
@@ -174,7 +230,7 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
                 }
 
         # ----------------------------
-        # Naviera iterable dicts (por ahora parse() -> lista)
+        # Naviera parse (por ahora pandas -> lista)
         # ----------------------------
         if job.naviera.upper() == "COSCO":
             nav_parser = COSCOFacturacionParser()
@@ -188,8 +244,8 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
         # ----------------------------
         resumen, det_cont, det_cargos, excs = reconcile(
             job.naviera,
-            fils_rows=iter_fils_dicts(),
-            naviera_rows=nav_rows_iter,
+            fils_rows=list(iter_fils_dicts()),   # 👈 reconcile actual asume lista en type hints y se reutiliza
+            naviera_rows=list(nav_rows_iter),    # 👈 igual
             money_tolerance=tol
         )
 
@@ -199,7 +255,7 @@ def run_job(job_id: int, money_tolerance: float, output_folder: str) -> Dict:
         _bulk_delete_job_results(job_id)
 
         # Summary bulk
-        buf = []
+        buf: List[dict] = []
         for r in resumen:
             buf.append({
                 "job_id": job_id,

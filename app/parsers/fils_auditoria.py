@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional, Iterator, Tuple
+import unicodedata
 
 from openpyxl import load_workbook
 
@@ -27,13 +28,22 @@ class FILSAuditoriaParser:
     - iter_rows() es para lectura pesada (streaming) usada en job_runner.
     """
 
-    # Ajusta estos a los encabezados reales de tu reporte FILS
-    # (ponemos heurística "contiene" para soportar variaciones).
-    REQUIRED_HEADER_HINTS = [
-        "guia",          # guía / guía viaje / numero guia
-        "contenedor",    # contenedor
-        "monto",         # monto / total / monto total
-    ]
+    # Sinónimos por campo (sobre headers ya normalizados: lower + sin acentos)
+    REQUIRED_FIELDS = {
+        # guía
+        "guia": [
+            "numero guia", "número guia", "guia", "guia viaje", "numero guia referencia",
+            "documento", "no documento", "no. documento", "referencia"
+        ],
+        # contenedor (en tu reporte sí existe, pero lo dejo “requerido suave” por si hay movimientos sin contenedor)
+        "contenedor": [
+            "contenedor", "container", "cntr"
+        ],
+        # monto a comparar (en tu screenshot: "monto tarifa")
+        "monto": [
+            "monto tarifa", "monto total", "total", "monto", "tarifa"
+        ],
+    }
 
     def sniff(self, path: str) -> Dict[str, Any]:
         """
@@ -59,7 +69,7 @@ class FILSAuditoriaParser:
             ws = wb.worksheets[0]
             sheet_name = ws.title
 
-            # Lee solo pocas filas (1 header + 2 samples)
+            # Lee pocas filas (1 header + 2 samples)
             raw_rows: List[List[str]] = []
             for row in ws.iter_rows(min_row=1, max_row=3, values_only=True):
                 raw_rows.append([self._cell_to_str(c) for c in row])
@@ -75,7 +85,7 @@ class FILSAuditoriaParser:
                     "sample_rows": [],
                 }
 
-            # Intento 1: header en fila 1
+            # Intento 1: header fila 1
             header = self._normalize_headers(raw_rows[0])
 
             # Si fila 1 está vacía o no parece encabezado, intentar fila 2
@@ -98,21 +108,18 @@ class FILSAuditoriaParser:
                     "sample_rows": raw_rows[1:] if len(raw_rows) > 1 else [],
                 }
 
-            # Validación flexible: que existan hints requeridos en el header
+            # Validación por sinónimos
             missing = self._missing_required(header)
             if missing:
-                errors.append(f"Faltan columnas requeridas (por heurística): {missing}. "
-                              f"Encabezados detectados: {header[:30]}")
+                errors.append(
+                    "Faltan columnas requeridas (por sinónimos): "
+                    f"{missing}. Encabezados detectados: {header[:60]}"
+                )
 
-            # Señales de archivo “pesado” (no falla, solo advierte)
-            # Nota: en read_only openpyxl no siempre calcula dimensiones de forma barata,
-            # así que no intentamos ws.max_row ni used_range aquí.
-            if len(header) > 150:
-                warnings.append("Se detectaron muchos encabezados/columnas. Verifique que sea el reporte correcto.")
+            if len(header) > 200:
+                warnings.append("Se detectaron muchas columnas. Verifique que sea el reporte correcto.")
 
             ok = len(errors) == 0
-
-            # sample_rows: devolvemos 2 filas de muestra (sin header)
             sample_rows = raw_rows[1:] if len(raw_rows) > 1 else []
 
             return {
@@ -139,19 +146,13 @@ class FILSAuditoriaParser:
         max_rows: Optional[int] = None,
     ) -> Iterator[Tuple[List[str], Tuple[Any, ...]]]:
         """
-        Lectura streaming (para job_runner):
-        - Abre en read_only
-        - Lee encabezado en header_row
-        - Itera filas de datos desde start_data_row (si None, header_row+1)
-        - No carga DataFrame completo.
-
+        Lectura streaming (para job_runner)
         Yields: (headers_normalizados, row_values_originales)
         """
         wb = load_workbook(filename=path, read_only=True, data_only=True)
         try:
             ws = wb.worksheets[sheet_index]
 
-            # Leer header
             header_cells = next(
                 ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True)
             )
@@ -179,10 +180,17 @@ class FILSAuditoriaParser:
         if value is None:
             return ""
         try:
-            s = str(value).strip()
+            return str(value).strip()
         except Exception:
             return ""
-        return s
+
+    def _strip_accents(self, s: str) -> str:
+        if not s:
+            return ""
+        return "".join(
+            c for c in unicodedata.normalize("NFKD", s)
+            if not unicodedata.combining(c)
+        )
 
     def _normalize_headers(self, headers: List[str]) -> List[str]:
         """
@@ -190,25 +198,45 @@ class FILSAuditoriaParser:
         - lower
         - trim
         - colapsa espacios
+        - elimina acentos (guía -> guia)
         """
         out: List[str] = []
         for h in headers:
-            h2 = " ".join((h or "").strip().lower().split())
-            out.append(h2)
+            h0 = (h or "").strip().lower()
+            h0 = self._strip_accents(h0)
+            h0 = " ".join(h0.split())
+            out.append(h0)
         return out
 
     def _is_mostly_empty(self, row: List[str]) -> bool:
         if not row:
             return True
         non_empty = sum(1 for c in row if c and c.strip())
-        return non_empty <= max(1, int(len(row) * 0.05))  # <=5% con contenido
+        return non_empty <= max(1, int(len(row) * 0.05))
 
     def _missing_required(self, headers: List[str]) -> List[str]:
         """
-        Requeridos por "hints": si cualquier header contiene el hint, se considera presente.
+        Requeridos por sinónimos.
+        Nota: contenedor lo dejamos requerido “suave”: si falta, WARN en vez de ERROR.
+        Pero guía y monto sí deben existir.
         """
         missing: List[str] = []
-        for hint in self.REQUIRED_HEADER_HINTS:
-            if not any(hint in h for h in headers):
-                missing.append(hint)
+
+        def has_any(field: str) -> bool:
+            syns = self.REQUIRED_FIELDS.get(field, [])
+            return any(any(s in h for s in syns) for h in headers)
+
+        # guía obligatorio
+        if not has_any("guia"):
+            missing.append("guia")
+
+        # monto obligatorio (monto tarifa / monto total / total / etc.)
+        if not has_any("monto"):
+            missing.append("monto")
+
+        # contenedor recomendado (no mata el precheck, pero lo reportamos)
+        if not has_any("contenedor"):
+            # lo marcamos como "contenedor (WARN)" para diferenciar
+            missing.append("contenedor (WARN)")
+
         return missing
