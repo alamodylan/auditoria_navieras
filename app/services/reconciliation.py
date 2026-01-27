@@ -1,7 +1,7 @@
 # app/services/reconciliation.py
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Any, Iterable, Optional
+from typing import Dict, List, Tuple, Any
 from decimal import Decimal
 
 from app.utils.money import parse_money
@@ -20,6 +20,7 @@ class ReconRow:
     ok: bool
     naviera: str
     fuente_naviera: str = ""
+    contenedor: str = ""
 
 
 @dataclass
@@ -32,101 +33,85 @@ class ReconException:
     naviera: str = ""
 
 
-def _row_date_key(r: dict) -> Any:
-    """
-    Ordena por fecha: intenta fecha_cierre, luego fecha.
-    """
-    return r.get("fecha_cierre") or r.get("fecha") or 0
-
-
 def reconcile(
     naviera: str,
-    fils_rows: Iterable[dict],
-    naviera_rows: Iterable[dict],
+    fils_rows: List[dict] | Any,
+    naviera_rows: List[dict] | Any,
     money_tolerance: Decimal
 ) -> Tuple[List[ReconRow], List[dict], List[dict], List[ReconException]]:
-    """
-    Streaming reconcile (no requiere listas enormes).
-    fils_rows: iterable de dicts normalizados por parser FILS.
-    naviera_rows: iterable de dicts normalizados por parser naviera.
 
-    Retorna:
-      - resumen_guias (ReconRow)
-      - detalle_contenedores (list dict)
-      - detalle_cargos (list dict) (MVP: solo cargos FILS si vienen)
-      - excepciones (ReconException)
-    """
-    naviera_up = naviera.upper().strip()
+    naviera_up = naviera.upper()
 
-    # ---------------------------------------------------------
-    # 1) FILS: mantener por guía:
-    #    - mejor CERRADA (más reciente)
-    #    - mejor ANY (más reciente)
-    # ---------------------------------------------------------
-    fils_best_closed: Dict[str, dict] = {}
-    fils_best_any: Dict[str, dict] = {}
-
-    fils_seen = 0
+    # -------------------------
+    # 1) Indexar FILS por guía (última cerrada) + index por contenedor
+    # -------------------------
+    fils_by_guia: Dict[str, List[dict]] = {}
     for r in fils_rows:
-        fils_seen += 1
         g = str(r.get("guia", "")).strip()
         if not g:
             continue
+        fils_by_guia.setdefault(g, []).append(r)
 
-        # best any
-        cur_any = fils_best_any.get(g)
-        if cur_any is None or _row_date_key(r) > _row_date_key(cur_any):
-            fils_best_any[g] = r
+    def pick_last_closed(rows: List[dict]) -> Tuple[str, dict]:
+        closed = [x for x in rows if str(x.get("estado", "")).upper().strip() == "CERRADA"]
+        if closed:
+            closed_sorted = sorted(
+                closed,
+                key=lambda x: x.get("fecha_cierre") or x.get("fecha") or 0,
+                reverse=True,
+            )
+            return "CERRADA", closed_sorted[0]
 
-        # best closed
-        estado_r = str(r.get("estado", "")).upper().strip()
-        if estado_r == "CERRADA":
-            cur_closed = fils_best_closed.get(g)
-            if cur_closed is None or _row_date_key(r) > _row_date_key(cur_closed):
-                fils_best_closed[g] = r
+        any_sorted = sorted(
+            rows,
+            key=lambda x: x.get("fecha_cierre") or x.get("fecha") or 0,
+            reverse=True,
+        )
+        return "NO_CERRADA", any_sorted[0]
 
-        if fils_seen % 10000 == 0:
-            logger.info(f"FILS streaming: filas={fils_seen} guias_any={len(fils_best_any)} guias_closed={len(fils_best_closed)}")
-
-    # resolver FILS final por guía
     fils_last: Dict[str, dict] = {}
     fils_estado: Dict[str, str] = {}
+    for g, rows in fils_by_guia.items():
+        estado, picked = pick_last_closed(rows)
+        fils_last[g] = picked
+        fils_estado[g] = estado
 
-    for g, any_r in fils_best_any.items():
-        if g in fils_best_closed:
-            fils_last[g] = fils_best_closed[g]
-            fils_estado[g] = "CERRADA"
-        else:
-            fils_last[g] = any_r
-            fils_estado[g] = "NO_CERRADA"
+    # index por contenedor usando la fila “picked”
+    fils_by_contenedor: Dict[str, str] = {}  # contenedor -> guia
+    for g, r in fils_last.items():
+        c = str(r.get("contenedor", "") or "").strip().upper()
+        if c:
+            fils_by_contenedor[c] = g
 
-    # ---------------------------------------------------------
-    # 2) Naviera: sumar por guía (sin guardar todas las filas)
-    # ---------------------------------------------------------
-    nav_totals: Dict[str, Decimal] = {}
-    nav_first_sheet: Dict[str, str] = {}
-    nav_first_ruta: Dict[str, str] = {}
-    nav_seen = 0
+    # -------------------------
+    # 2) Indexar NAVIERA:
+    #   - por guía cuando exista
+    #   - por contenedor cuando no exista guía
+    # -------------------------
+    nav_by_guia: Dict[str, List[dict]] = {}
+    nav_by_contenedor: Dict[str, List[dict]] = {}
 
     for r in naviera_rows:
-        nav_seen += 1
         g = str(r.get("guia", "")).strip()
-        if not g:
-            continue
+        c = str(r.get("contenedor", "")).strip().upper()
+        if g:
+            nav_by_guia.setdefault(g, []).append(r)
+        elif c:
+            nav_by_contenedor.setdefault(c, []).append(r)
 
-        nav_totals[g] = nav_totals.get(g, Decimal("0")) + parse_money(r.get("total_naviera"))
-        if g not in nav_first_sheet:
-            nav_first_sheet[g] = str(r.get("sheet") or "").strip()
-        if g not in nav_first_ruta:
-            nav_first_ruta[g] = str(r.get("ruta") or "").strip()
+    # -------------------------
+    # 3) Universo de guías a evaluar
+    #   - todas las de FILS
+    #   - más las que aparezcan por guía en naviera
+    #   - más las que aparezcan por contenedor en naviera (si ese contenedor liga a guía FILS)
+    # -------------------------
+    all_guias = set(fils_last.keys()) | set(nav_by_guia.keys())
+    for cont, rows in nav_by_contenedor.items():
+        g = fils_by_contenedor.get(cont)
+        if g:
+            all_guias.add(g)
 
-        if nav_seen % 10000 == 0:
-            logger.info(f"NAVIERA streaming: filas={nav_seen} guias={len(nav_totals)}")
-
-    # ---------------------------------------------------------
-    # 3) Universo de guías
-    # ---------------------------------------------------------
-    all_guias = sorted(set(list(fils_last.keys()) + list(nav_totals.keys())))
+    all_guias = sorted(all_guias)
 
     resumen: List[ReconRow] = []
     excepciones: List[ReconException] = []
@@ -135,14 +120,34 @@ def reconcile(
 
     for guia in all_guias:
         fils_r = fils_last.get(guia)
-        total_nav = nav_totals.get(guia)
+        cont = (str(fils_r.get("contenedor") or "").strip().upper() if fils_r else "")
 
-        # Caso: solo en naviera
-        if not fils_r and total_nav is not None:
+        nav_rs = nav_by_guia.get(guia)
+        # Si naviera no trae guía, probamos por contenedor
+        if not nav_rs and cont:
+            nav_rs = nav_by_contenedor.get(cont)
+
+        # totals naviera
+        total_nav = sum(parse_money(x.get("total_naviera")) for x in (nav_rs or []))
+
+        # total FILS = monto_tarifa(monto_total) + cargos adicionales (total_naviera de cargos)
+        total_fils = Decimal("0")
+        if fils_r:
+            total_fils = parse_money(fils_r.get("monto_total") or 0)
+            # sumar cargos adicionales FILS (ya vienen filtrados en job_runner)
+            cargos = fils_r.get("cargos") or []
+            total_cargos = sum(parse_money(c.get("total_naviera") or c.get("monto") or 0) for c in cargos)
+            total_fils = total_fils + total_cargos
+
+        # casos solo en uno u otro
+        if not fils_r and nav_rs:
+            # naviera tiene algo que FILS no
+            ref_cont = str(nav_rs[0].get("contenedor") or "").strip().upper()
             excepciones.append(ReconException(
                 tipo="SOLO_EN_NAVIERA",
                 guia=guia,
-                detalle="Guía existe en facturación naviera pero no en FILS.",
+                contenedor=ref_cont,
+                detalle="Existe en facturación naviera pero no en FILS.",
                 severidad="ERROR",
                 naviera=naviera_up
             ))
@@ -154,19 +159,18 @@ def reconcile(
                 diferencia=total_nav,
                 ok=False,
                 naviera=naviera_up,
-                fuente_naviera=nav_first_sheet.get(guia, "")
+                fuente_naviera=(nav_rs[0].get("sheet") or ""),
+                contenedor=ref_cont
             ))
             continue
 
-        # Caso: solo en FILS
-        if fils_r and total_nav is None:
-            total_fils = parse_money(fils_r.get("monto_total") or fils_r.get("monto_flete") or 0)
+        if fils_r and not nav_rs:
             estado = fils_estado.get(guia, "NO_CERRADA")
-
             excepciones.append(ReconException(
                 tipo="SOLO_EN_FILS",
                 guia=guia,
-                detalle="Guía existe en FILS pero no en facturación naviera.",
+                contenedor=cont,
+                detalle="Existe en FILS pero no en facturación naviera (ni por guía ni por contenedor).",
                 severidad="ERROR",
                 naviera=naviera_up
             ))
@@ -174,6 +178,7 @@ def reconcile(
                 excepciones.append(ReconException(
                     tipo="NO_CERRADA",
                     guia=guia,
+                    contenedor=cont,
                     detalle="No se encontró guía CERRADA para esta guía en FILS.",
                     severidad="WARN",
                     naviera=naviera_up
@@ -187,18 +192,12 @@ def reconcile(
                 diferencia=total_fils,
                 ok=False,
                 naviera=naviera_up,
+                contenedor=cont
             ))
             continue
 
-        # Caso: ambos existen
-        total_naviera = total_nav or Decimal("0")
-
-        # Total FILS: si monto_total existe úsalo; si no, flete + extras
-        total_fils = parse_money(fils_r.get("monto_total") or 0)
-        if total_fils == 0:
-            total_fils = parse_money(fils_r.get("monto_flete") or 0) + parse_money(fils_r.get("monto_extras") or 0)
-
-        diff = total_fils - total_naviera
+        # ambos existen
+        diff = total_fils - total_nav
         ok = abs(diff) <= money_tolerance
 
         estado = fils_estado.get(guia, "NO_CERRADA")
@@ -206,6 +205,7 @@ def reconcile(
             excepciones.append(ReconException(
                 tipo="NO_CERRADA",
                 guia=guia,
+                contenedor=cont,
                 detalle="No se encontró guía CERRADA para esta guía en FILS.",
                 severidad="WARN",
                 naviera=naviera_up
@@ -215,7 +215,8 @@ def reconcile(
             excepciones.append(ReconException(
                 tipo="DIFERENCIA",
                 guia=guia,
-                detalle=f"Diferencia detectada. FILS={total_fils} vs NAVIERA={total_naviera}.",
+                contenedor=cont,
+                detalle=f"Diferencia. FILS={total_fils} vs NAVIERA={total_nav}.",
                 severidad="ERROR",
                 naviera=naviera_up
             ))
@@ -224,39 +225,47 @@ def reconcile(
             guia=guia,
             estado=estado,
             total_fils=total_fils,
-            total_naviera=total_naviera,
+            total_naviera=total_nav,
             diferencia=diff,
             ok=ok,
             naviera=naviera_up,
-            fuente_naviera=nav_first_sheet.get(guia, "")
+            fuente_naviera=(nav_rs[0].get("sheet") or "") if nav_rs else "",
+            contenedor=cont
         ))
 
-        # Detalle contenedores (MVP: 1 por guía)
         detalle_cont.append({
             "guia": guia,
-            "contenedor": (fils_r.get("contenedor") or ""),
-            "ruta": (fils_r.get("ruta") or nav_first_ruta.get(guia, "")),
-            "flete": str(parse_money(fils_r.get("monto_flete") or 0)),
-            "extras": str(parse_money(fils_r.get("monto_extras") or 0)),
+            "contenedor": cont,
+            "ruta": (fils_r.get("ruta") or (nav_rs[0].get("ruta") if nav_rs else "")) if fils_r else "",
+            "flete": "0",
+            "extras": "0",
             "total": str(total_fils),
             "naviera": naviera_up,
         })
 
-        # Detalle cargos (si FILS trae lista)
-        cargos = fils_r.get("cargos") or []
-        for c in cargos:
+        # detalle cargos FILS (adicionales)
+        for c in (fils_r.get("cargos") or []):
             detalle_cargos.append({
                 "guia": guia,
-                "contenedor": c.get("contenedor") or fils_r.get("contenedor") or "",
-                "tipo_cargo": c.get("tipo_cargo") or "CARGO",
-                "monto": str(parse_money(c.get("monto") or 0)),
+                "contenedor": cont,
+                "tipo_cargo": c.get("tipo_cargo") or c.get("cargo") or "CARGO_ADICIONAL",
+                "monto": str(parse_money(c.get("total_naviera") or c.get("monto") or 0)),
                 "origen": "FILS",
                 "naviera": naviera_up,
             })
 
-    logger.info(
-        f"Reconciliation done naviera={naviera_up} "
-        f"resumen={len(resumen)} excepciones={len(excepciones)} "
-        f"fils_filas={fils_seen} nav_filas={nav_seen}"
-    )
+        # detalle cargos NAVIERA si vienen desglosados
+        for n in (nav_rs or []):
+            cargo = str(n.get("cargo") or "").strip()
+            if cargo:
+                detalle_cargos.append({
+                    "guia": guia,
+                    "contenedor": cont,
+                    "tipo_cargo": cargo,
+                    "monto": str(parse_money(n.get("total_naviera") or 0)),
+                    "origen": "NAVIERA",
+                    "naviera": naviera_up,
+                })
+
+    logger.info(f"Reconciliation done naviera={naviera_up} resumen={len(resumen)} excepciones={len(excepciones)}")
     return resumen, detalle_cont, detalle_cargos, excepciones
