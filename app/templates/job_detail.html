@@ -1,22 +1,95 @@
 {% extends "base.html" %}
 {% block title %}Job {{ job.id }}{% endblock %}
+
 {% block content %}
   <h2>Job #{{ job.id }}</h2>
-  <p><b>Estado:</b> {{ job.status }}</p>
+
+  <p><b>Estado:</b>
+    <span style="padding:4px 8px;border-radius:8px;background:#f2f2f2;">
+      {{ job.status }}
+    </span>
+  </p>
+
   {% if job.error_message %}
-    <pre>{{ job.error_message }}</pre>
+    <h3>Error</h3>
+    <pre style="white-space:pre-wrap;background:#fff3f3;border:1px solid #ffcccc;padding:10px;border-radius:8px;">{{ job.error_message }}</pre>
   {% endif %}
 
   <h3>Archivos</h3>
   <ul>
     {% for f in job.files %}
-      <li>{{ f.file_type }} - {{ f.original_name }}</li>
+      <li><b>{{ f.file_type }}</b> - {{ f.original_name }}</li>
     {% endfor %}
   </ul>
 
-  {% if job.status == "DONE" %}
+  <hr>
+
+  {# =========================
+     ACCIONES SEGÚN ESTADO
+     ========================= #}
+
+  {% if job.status in ["CREATED", "PRECHECK_OK", "QUEUED"] %}
+    <form method="POST" action="{{ url_for('web.run_job_route', job_id=job.id) }}">
+      <button type="submit" style="padding:10px 14px;border-radius:10px;border:0;background:#111;color:#fff;cursor:pointer;">
+        {% if job.status == "QUEUED" %}
+          Re-encolar / Reintentar
+        {% else %}
+          Ejecutar Job
+        {% endif %}
+      </button>
+      <a href="{{ url_for('web.job_detail', job_id=job.id) }}" style="margin-left:10px;">
+        Refrescar
+      </a>
+    </form>
+
+    {% if job.status == "QUEUED" %}
+      <p style="margin-top:10px;color:#555;">
+        Este job está en cola. El <b>worker</b> lo tomará en breve.
+      </p>
+    {% endif %}
+
+  {% elif job.status == "RUNNING" %}
+    <p style="color:#555;">
+      El job está corriendo en el worker. Esta página se refresca sola.
+    </p>
     <p>
+      <a href="{{ url_for('web.job_detail', job_id=job.id) }}">Refrescar ahora</a>
+    </p>
+
+  {% elif job.status == "DONE" %}
+    <p>
+      ✅ Listo.
+      <a href="{{ url_for('web.results', job_id=job.id) }}"><b>Ver resultados</b></a>
+      &nbsp;|&nbsp;
       <a href="{{ url_for('web.download_export', job_id=job.id) }}">Descargar Excel</a>
     </p>
+
+  {% elif job.status == "FAILED" %}
+    <p style="color:#b00020;">
+      ❌ Falló. Puedes reintentar (lo vuelve a poner en cola).
+    </p>
+    <form method="POST" action="{{ url_for('web.run_job_route', job_id=job.id) }}">
+      <button type="submit" style="padding:10px 14px;border-radius:10px;border:0;background:#b00020;color:#fff;cursor:pointer;">
+        Reintentar Job
+      </button>
+      <a href="{{ url_for('web.job_detail', job_id=job.id) }}" style="margin-left:10px;">
+        Refrescar
+      </a>
+    </form>
+
+  {% else %}
+    <p style="color:#555;">
+      Estado actual: {{ job.status }}.
+      <a href="{{ url_for('web.job_detail', job_id=job.id) }}">Refrescar</a>
+    </p>
+  {% endif %}
+
+  {# Auto-refresh SOLO si está corriendo/encolado #}
+  {% if job.status in ["QUEUED", "RUNNING"] %}
+    <script>
+      setTimeout(function () {
+        window.location.reload();
+      }, 10000); // 10s
+    </script>
   {% endif %}
 {% endblock %}

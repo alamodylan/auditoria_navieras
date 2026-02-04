@@ -154,16 +154,27 @@ def run_job_route(job_id: int):
         flash(f"No se puede ejecutar. Estado actual: {job.status}", "error")
         return redirect(url_for("web.job_detail", job_id=job_id))
 
-    tol = float(current_app.config.get("MONEY_TOLERANCE", 1.00))
-    output_folder = current_app.config.get("OUTPUT_FOLDER", "outputs")
+    try:
+        # ✅ Encolar en vez de ejecutar aquí (evita timeout/worker killed)
+        job.status = "QUEUED"
+        job.error_message = None
+        db.session.commit()
 
-    result = run_job(job_id=job_id, money_tolerance=tol, output_folder=output_folder)
+        flash("Job encolado. Se ejecutará en background.", "success")
+        return redirect(url_for("web.job_detail", job_id=job_id))
 
-    if result.get("status") == "DONE":
-        flash("Job ejecutado correctamente.", "success")
-        return redirect(url_for("web.results", job_id=job_id))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error encolando Job {job_id}: {e}")
+        flash("No se pudo encolar el job.", "error")
+        return redirect(url_for("web.job_detail", job_id=job_id))
 
-    flash(f"Job falló: {result.get('error')}", "error")
+
+# ✅ OPCIONAL: Botón "Refrescar" (revisar estado sin ejecutar)
+@web_bp.route("/job/<int:job_id>/refresh", methods=["POST"])
+def refresh_job_route(job_id: int):
+    job = Job.query.get_or_404(job_id)
+    flash(f"Estado actual: {job.status}", "info")
     return redirect(url_for("web.job_detail", job_id=job_id))
 
 
