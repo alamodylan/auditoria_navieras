@@ -2,12 +2,22 @@
 
 import os
 import time
+import signal
 from sqlalchemy import text
 
 from app import create_app
 from app.extensions import db
 from app.models import Job
 from app.services.job_runner import run_job
+
+
+STOP = False
+
+
+def _handle_stop(signum, frame):
+    global STOP
+    STOP = True
+    print(f"🛑 Señal recibida ({signum}). Cerrando worker con gracia...")
 
 
 def _set_search_path():
@@ -30,6 +40,12 @@ def _fetch_next_job() -> Job | None:
 
 
 def main():
+    # Señales típicas en Render al detener/redeploy
+    signal.signal(signal.SIGTERM, _handle_stop)
+    signal.signal(signal.SIGINT, _handle_stop)
+
+    print("🚀 Worker iniciado. Esperando jobs...")
+
     app = create_app()
 
     # Configs (puedes cambiarlos por env vars en Render)
@@ -38,7 +54,9 @@ def main():
     output_folder = os.getenv("OUTPUT_FOLDER", "outputs")
 
     with app.app_context():
-        while True:
+        print("✅ App context OK. Entrando al loop infinito.")
+
+        while not STOP:
             try:
                 job = _fetch_next_job()
 
@@ -46,10 +64,12 @@ def main():
                     time.sleep(poll_seconds)
                     continue
 
-                # Marcar RUNNING
+                print(f"🧾 Job encontrado: id={job.id}. Marcando RUNNING...")
                 job.mark_running()
                 job.error_message = None
                 db.session.commit()
+
+                t0 = time.time()
 
                 # Ejecutar
                 result = run_job(
@@ -58,14 +78,20 @@ def main():
                     output_folder=output_folder,
                 )
 
+                elapsed = time.time() - t0
+                status = (result or {}).get("status", "UNKNOWN")
+
+                print(f"✅ Job {job.id} terminó. status={status} elapsed={elapsed:.1f}s")
+
                 # run_job ya marca DONE o FAILED internamente,
                 # pero por seguridad, si viniera algo raro:
-                if result.get("status") == "FAILED" and job.status != "FAILED":
-                    job.mark_failed(result.get("error", "Job falló sin detalle."))
+                if status == "FAILED" and job.status != "FAILED":
+                    job.mark_failed((result or {}).get("error", "Job falló sin detalle."))
                     db.session.commit()
 
             except Exception as e:
-                # Si algo revienta a nivel worker, no lo mates: log y sigue.
+                print(f"❌ Error en worker: {type(e).__name__}: {e}")
+
                 try:
                     db.session.rollback()
                 except Exception:
@@ -73,6 +99,15 @@ def main():
 
                 # Evitar loop súper rápido en caso de error persistente
                 time.sleep(max(poll_seconds, 3))
+
+            finally:
+                # MUY importante en procesos infinitos: limpiar sesión al final de cada vuelta
+                try:
+                    db.session.remove()
+                except Exception:
+                    pass
+
+    print("👋 Worker detenido.")
 
 
 if __name__ == "__main__":
